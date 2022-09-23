@@ -16,6 +16,13 @@ import tempfile
 from aliyunsdkcore.client import AcsClient
 from aliyunsdksts.request.v20150401.AssumeRoleRequest import AssumeRoleRequest
 
+ACL_MAPPING = {
+    'default': oss2.OBJECT_ACL_DEFAULT,
+    'private': oss2.OBJECT_ACL_PRIVATE,
+    'public_read': oss2.OBJECT_ACL_PUBLIC_READ,
+    'public_read_write': oss2.OBJECT_ACL_PUBLIC_READ_WRITE
+}
+
 
 class STSSystem:
     def __init__(self, access_key_id=None, access_key_secret=None, endpoint=None):
@@ -63,21 +70,22 @@ class OSSFileSystem:
             return oss2.auth(self.access_key, self.secret_key)
 
     def bucket(self, bucket_name, **kwargs) -> oss2.Bucket:
-        print(bucket_name, self.endpoint)
         return oss2.Bucket(self.auth(), self.endpoint, bucket_name, **kwargs)
 
-    def upload(self, bucket_name, local_path, key):
+    def upload(self, bucket_name, local_path, key, headers=None, **kwargs):
         """
         上传文件
         :param bucket_name:
         :param key:
         :param local_path:
+        :param headers:
+        :param kwargs:
         :return:
         """
         bucket_obj = self.bucket(bucket_name=bucket_name)
-        bucket_obj.put_object_from_file(key, local_path)
+        bucket_obj.put_object_from_file(key, local_path, headers, **kwargs)
 
-    def upload_str(self, bucket_name, str_content, key):
+    def upload_str(self, bucket_name, str_content, key, **kwargs):
         """
         上传字符串
         :param bucket_name:
@@ -85,9 +93,9 @@ class OSSFileSystem:
         :param key:
         :return:
         """
-        return self.upload_object(bucket_name=bucket_name, content=str_content, key=key)
+        return self.upload_object(bucket_name=bucket_name, content=str_content, key=key, **kwargs)
 
-    def upload_byte(self, bucket_name, byte_content, key):
+    def upload_byte(self, bucket_name, byte_content, key, **kwargs):
         """
         上传Bytes
         :param bucket_name:
@@ -95,9 +103,9 @@ class OSSFileSystem:
         :param key:
         :return:
         """
-        return self.upload_object(bucket_name=bucket_name, content=byte_content, key=key)
+        return self.upload_object(bucket_name=bucket_name, content=byte_content, key=key, **kwargs)
 
-    def upload_unicode(self, bucket_name, unicode_content, key):
+    def upload_unicode(self, bucket_name, unicode_content, key, **kwargs):
         """
         上传Unicode字符
         :param bucket_name:
@@ -105,9 +113,9 @@ class OSSFileSystem:
         :param key:
         :return:
         """
-        return self.upload_object(bucket_name=bucket_name, content=unicode_content, key=key)
+        return self.upload_object(bucket_name=bucket_name, content=unicode_content, key=key, **kwargs)
 
-    def upload_streaming(self, bucket_name, stream_content, key):
+    def upload_streaming(self, bucket_name, stream_content, key, **kwargs):
         """
         上传网络流
         :param bucket_name:
@@ -115,11 +123,19 @@ class OSSFileSystem:
         :param key:
         :return:
         """
-        return self.upload_object(bucket_name=bucket_name, content=stream_content, key=key)
+        return self.upload_object(bucket_name=bucket_name, content=stream_content, key=key, **kwargs)
 
-    def upload_object(self, bucket_name, content, key):
+    def upload_object(self, bucket_name, content, key, **kwargs):
+        """
+
+        :param bucket_name:
+        :param content:
+        :param key:
+        :param kwargs:  headers=None, progress_callback=None
+        :return:
+        """
         bucket = self.bucket(bucket_name)
-        result = bucket.put_object(key, content)
+        result = bucket.put_object(key, content, **kwargs)
         return result
 
     def download(self, bucket_name, key, local_path=None) -> str:
@@ -190,4 +206,149 @@ class OSSFileSystem:
         # bucket.append_object('<yourObjectName>', result.next_position, 'content of second append')
         pass
 
+    def object_meta_naive(self, bucket_name, key, version_id=None):
+        """
+        部分元信息
+        :param bucket_name:
+        :param key:
+        :param version_id:
+        :return:
+        """
+        bucket = self.bucket(bucket_name=bucket_name)
+        params = dict()
+        if version_id:
+            params['versionId'] = version_id
+        try:
+            simplified_meta = bucket.get_object_meta(key, params=params)
+        except oss2.exceptions.NoSuchKey:
+            return {}
+        else:
+            return simplified_meta.headers
 
+    def object_meta(self, bucket_name, key, version_id=None):
+        """
+        全部元信息
+        :param bucket_name:
+        :param key:
+        :param version_id:
+        :return:
+        """
+        bucket = self.bucket(bucket_name=bucket_name)
+        params = dict()
+        if version_id:
+            params['versionId'] = version_id
+        try:
+            object_meta = bucket.head_object(key, params=params)
+        except oss2.exceptions.NoSuchKey:
+            return {}
+        else:
+            return object_meta.headers
+
+    def exists(self, bucket_name, key):
+        bucket = self.bucket(bucket_name=bucket_name)
+        return bucket.object_exists(key)
+
+    def acl_control(self, bucket_name, key, acl_name):
+        """
+        继承Bucket	文件遵循存储空间的访问权限。	oss2.OBJECT_ACL_DEFAULT
+        私有	文件的拥有者和授权用户有该文件的读写权限，其他用户没有权限操作该文件。	oss2.OBJECT_ACL_PRIVATE
+        公共读	文件的拥有者和授权用户有该文件的读写权限，其他用户只有文件的读权限。请谨慎使用该权限。	oss2.OBJECT_ACL_PUBLIC_READ
+        公共读写	所有用户都有该文件的读写权限。请谨慎使用该权限。	oss2.OBJECT_ACL_PUBLIC_READ_WRITE
+        :param bucket_name:
+        :param key:
+        :param acl_name:
+        :return:
+        """
+        bucket = self.bucket(bucket_name=bucket_name)
+        acl_value = ACL_MAPPING.get(acl_name)
+        bucket.put_object_acl(key, acl_value)
+
+    def get_acl(self, bucket_name, key):
+        bucket = self.bucket(bucket_name=bucket_name)
+        return bucket.get_object_acl(key).acl
+
+    def update_obj_meta(self, bucket_name, key, meta_info):
+        bucket = self.bucket(bucket_name=bucket_name)
+        bucket.update_object_meta(key, meta_info)
+
+    def archive_convert(self, bucket_name, key):
+        """
+        转换为归档类型
+        :return:
+        """
+        headers = {'x-oss-storage-class': oss2.BUCKET_STORAGE_CLASS_ARCHIVE}
+        bucket = self.bucket(bucket_name=bucket_name)
+        bucket.copy_object(bucket.bucket_name, key, key, headers)
+
+    def cold_archive_convert(self, bucket_name, key):
+        """
+        转换为冷归档类型
+        :return:
+        """
+        headers = {'x-oss-storage-class': oss2.BUCKET_STORAGE_CLASS_COLDARCHIVE}
+        bucket = self.bucket(bucket_name=bucket_name)
+        bucket.copy_object(bucket.bucket_name, key, key, headers)
+
+    def archive_recovery_standard(self, bucket_name, key):
+        """
+         将Object存储类型转换为标准访问类型
+        :param bucket_name:
+        :param key:
+        :return:
+        """
+        bucket = self.bucket(bucket_name=bucket_name)
+        meta = bucket.head_object(key)
+        if meta.resp.headers['x-oss-storage-class'] == oss2.BUCKET_STORAGE_CLASS_ARCHIVE:
+            bucket.restore_object(key)
+            while True:
+                meta = bucket.head_object(key)
+                if meta.resp.headers['x-oss-restore'] == 'ongoing-request="true"':
+                    time.sleep(5)
+                else:
+                    break
+        # 通过添加存储类型Header，将Object存储类型转换为标准类型。
+        headers = {'x-oss-storage-class': oss2.BUCKET_STORAGE_CLASS_STANDARD}
+        bucket.copy_object(bucket.bucket_name, key, key, headers)
+
+    def archive_recovery_ia(self, bucket_name, key):
+        """
+        将Object存储类型转换为低频访问类型。
+        :param bucket_name:
+        :param key:
+        :return:
+        """
+        bucket = self.bucket(bucket_name=bucket_name)
+        meta = bucket.head_object(key)
+        if meta.resp.headers['x-oss-storage-class'] == oss2.BUCKET_STORAGE_CLASS_ARCHIVE:
+            bucket.restore_object(key)
+            while True:
+                meta = bucket.head_object(key)
+                if meta.resp.headers['x-oss-restore'] == 'ongoing-request="true"':
+                    time.sleep(5)
+                else:
+                    break
+        # 通过添加存储类型Header，将Object存储类型转换为低频访问类型。
+        headers = {'x-oss-storage-class': oss2.BUCKET_STORAGE_CLASS_IA}
+        bucket.copy_object(bucket.bucket_name, key, key, headers)
+
+    def ls(self, bucket_name, key):
+        bucket = self.bucket(bucket_name=bucket_name)
+        if self.isdir(bucket_name, key):
+            key = key.rstrip('/') + "/"
+            data = []
+            for obj in oss2.ObjectIteratorV2(bucket, prefix=key, delimiter='/', start_after=key, fetch_owner=True):
+                # 通过is_prefix方法判断obj是否为文件夹。
+                if obj.is_prefix():  # 判断obj为文件夹。
+                    data.append(obj.key)
+                else:  # 判断obj为文件。
+                    data.append(obj.key)
+            return data
+        else:
+            return [key]
+
+    def isdir(self, bucket_name, key):
+        key = key.rstrip('/')
+        bucket = self.bucket(bucket_name=bucket_name)
+        for obj in oss2.ObjectIterator(bucket, prefix=key, delimiter='/'):
+            return obj.is_prefix()
+        return False
